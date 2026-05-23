@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.gridspec import GridSpec
 import warnings
 import re
 import yfinance as yf
@@ -62,7 +63,16 @@ def black_scholes_greeks(S, K, T, r, sigma, option_type="call"):
     return {"delta": float(delta), "gamma": float(gamma), "vega": float(vega), "theta": float(theta)}
 
 # --- 1. Monte Carlo Simulation Function ---
-def monte_carlo_portfolio_sim(prices_dict, weights, time_horizon=252, num_sim=20000, conf_level=0.95):
+def monte_carlo_portfolio_sim(
+    prices_dict,
+    weights,
+    time_horizon=252,
+    num_sim=20000,
+    conf_level=0.95,
+    *,
+    save_path="portfolio_simulation.png",
+    show_plot=False,
+):
 
     tickers = list(prices_dict.keys())
     weights = np.array(weights)
@@ -120,16 +130,40 @@ def monte_carlo_portfolio_sim(prices_dict, weights, time_horizon=252, num_sim=20
     print("Final Value Percentiles:")
     print({f'P{p}': f'${val:,.2f}' for p, val in zip([10, 25, 50, 75, 90], percentiles)})
 
-    plt.figure(figsize=(10, 6))
-    plt.hist(final_vals, bins=60, alpha=0.7, density=True)
-    plt.title(f"Portfolio Monte Carlo Distribution ({num_sim:,} runs)")
-    plt.xlabel("Final Portfolio Value")
-    plt.ylabel("Density")
-    plt.axvline(val_at_risk_level, linestyle='dashed', linewidth=2)
-    plt.axvline(weighted_init, linestyle='dotted', linewidth=2)
-    plt.grid(axis='y', linestyle='--', alpha=0.7)
-    plt.savefig('portfolio_simulation.png', dpi=300, bbox_inches='tight')
-    print("Plot saved as 'portfolio_simulation.png'")
+    days = np.arange(time_horizon + 1)
+    pct_paths = np.percentile(results, [10, 25, 50, 75, 90], axis=0)
+    sample_idx = np.random.choice(num_sim, size=min(80, num_sim), replace=False)
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    for idx in sample_idx:
+        axes[0].plot(days, results[idx], color="steelblue", alpha=0.08, linewidth=0.8)
+    axes[0].fill_between(days, pct_paths[0], pct_paths[-1], alpha=0.2, color="steelblue", label="P10–P90 band")
+    axes[0].plot(days, pct_paths[2], color="navy", linewidth=2, label="Median path")
+    axes[0].axhline(weighted_init, color="orange", linestyle=":", linewidth=1.8, label="Initial value")
+    axes[0].set_title(f"Portfolio Value Paths ({num_sim:,} simulations)")
+    axes[0].set_xlabel("Trading Day")
+    axes[0].set_ylabel("Portfolio Value ($)")
+    axes[0].legend(loc="upper left")
+    axes[0].grid(axis="y", linestyle="--", alpha=0.5)
+
+    axes[1].hist(final_vals, bins=60, alpha=0.75, color="steelblue", density=True)
+    axes[1].axvline(val_at_risk_level, color="red", linestyle="--", linewidth=1.8, label=f"VaR {int(conf_level * 100)}%")
+    axes[1].axvline(weighted_init, color="orange", linestyle=":", linewidth=1.8, label="Initial value")
+    axes[1].set_title(f"Final Value Distribution ({num_sim:,} runs)")
+    axes[1].set_xlabel("Final Portfolio Value ($)")
+    axes[1].set_ylabel("Density")
+    axes[1].legend()
+    axes[1].grid(axis="y", linestyle="--", alpha=0.5)
+
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
+        print(f"Plot saved as '{save_path}'")
+    if show_plot:
+        plt.show()
+    else:
+        plt.close(fig)
 
 
 # --- 2. Fake Price Generator ---
@@ -173,6 +207,8 @@ def monte_carlo_options_sim(
     conf_level=0.95,
     risk_free=0.045,
     contract_size=100,
+    save_path="options_simulation.png",
+    show_plot=False,
 ):
     tickers = list(options_config.keys())
     prices_df = prices_df[tickers].dropna()
@@ -294,31 +330,64 @@ def monte_carlo_options_sim(
     print(f"  Portfolio Theta : {total_theta:>10.2f}  (per day)")
 
     # --- Plots ---
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    n_tickers = len(tickers)
+    fig = plt.figure(figsize=(14, 4 + 2.5 * n_tickers), layout="constrained")
+    gs = GridSpec(1 + n_tickers, 2, figure=fig, height_ratios=[1] + [1] * n_tickers)
 
-    axes[0].hist(final_values, bins=80, alpha=0.75, color="steelblue", density=True)
-    axes[0].axvline(var_threshold, color="red", linestyle="--", linewidth=1.8, label=f"VaR {int(conf_level*100)}%")
-    axes[0].axvline(total_init_value, color="orange", linestyle=":", linewidth=1.8, label="Initial Value")
-    axes[0].axvline(expected_val, color="green", linestyle="-.", linewidth=1.8, label="Expected Value")
-    axes[0].set_title(f"Options Portfolio Payoff Distribution\n({num_sim:,} simulations)")
-    axes[0].set_xlabel("Final Portfolio Value ($)")
-    axes[0].set_ylabel("Density")
-    axes[0].legend()
-    axes[0].grid(axis="y", linestyle="--", alpha=0.5)
+    ax_payoff = fig.add_subplot(gs[0, 0])
+    ax_payoff.hist(final_values, bins=80, alpha=0.75, color="steelblue", density=True)
+    ax_payoff.axvline(var_threshold, color="red", linestyle="--", linewidth=1.8, label=f"VaR {int(conf_level * 100)}%")
+    ax_payoff.axvline(total_init_value, color="orange", linestyle=":", linewidth=1.8, label="Initial value")
+    ax_payoff.axvline(expected_val, color="green", linestyle="-.", linewidth=1.8, label="Expected value")
+    ax_payoff.set_title(f"Options Portfolio Payoff Distribution\n({num_sim:,} simulations)")
+    ax_payoff.set_xlabel("Final Portfolio Value ($)")
+    ax_payoff.set_ylabel("Density")
+    ax_payoff.legend()
+    ax_payoff.grid(axis="y", linestyle="--", alpha=0.5)
 
     ticker_init = [
         init_opt_prices[i] * contract_size * int(options_config[t]["contracts"]) for i, t in enumerate(tickers)
     ]
-    x = np.arange(len(tickers))
-    axes[1].bar(x, ticker_init, 0.6, label="Current Value (BS)", color="seagreen", alpha=0.85)
-    axes[1].set_xticks(x)
-    axes[1].set_xticklabels(tickers)
-    axes[1].set_title("Per-Ticker Option Notional Value (t=0)")
-    axes[1].set_ylabel("Value ($)")
-    axes[1].legend()
-    axes[1].grid(axis="y", linestyle="--", alpha=0.5)
+    x = np.arange(n_tickers)
+    ax_notional = fig.add_subplot(gs[0, 1])
+    ax_notional.bar(x, ticker_init, 0.6, label="Current value (BS)", color="seagreen", alpha=0.85)
+    ax_notional.set_xticks(x)
+    ax_notional.set_xticklabels(tickers)
+    ax_notional.set_title("Per-Ticker Option Notional Value (t=0)")
+    ax_notional.set_ylabel("Value ($)")
+    ax_notional.legend()
+    ax_notional.grid(axis="y", linestyle="--", alpha=0.5)
 
-    plt.tight_layout()
+    sim_days = np.arange(1, sim_horizon + 1)
+    sample_idx = np.random.choice(num_sim, size=min(60, num_sim), replace=False)
+    for i, ticker in enumerate(tickers):
+        ax_path = fig.add_subplot(gs[1 + i, :])
+        ticker_paths = paths[:, :, i]
+        pct_paths = np.percentile(ticker_paths, [10, 25, 50, 75, 90], axis=0)
+        strike = float(options_config[ticker]["strike"])
+        otype = options_config[ticker]["type"].lower()
+
+        for idx in sample_idx:
+            ax_path.plot(sim_days, ticker_paths[idx], color="steelblue", alpha=0.07, linewidth=0.8)
+        ax_path.fill_between(sim_days, pct_paths[0], pct_paths[-1], alpha=0.2, color="steelblue", label="P10–P90 band")
+        ax_path.plot(sim_days, pct_paths[2], color="navy", linewidth=1.8, label="Median path")
+        ax_path.axhline(strike, color="crimson", linestyle="--", linewidth=1.5, label=f"Strike ${strike:,.0f}")
+        ax_path.axhline(current_prices[i], color="orange", linestyle=":", linewidth=1.5, label=f"Spot ${current_prices[i]:,.2f}")
+        ax_path.set_title(f"{ticker} — Simulated Underlying Paths ({otype.upper()}, expiry day {int(options_config[ticker]['expiry_days'])})")
+        ax_path.set_xlabel("Trading Day")
+        ax_path.set_ylabel("Price ($)")
+        ax_path.legend(loc="upper left", fontsize=8)
+        ax_path.grid(axis="y", linestyle="--", alpha=0.5)
+
+    fig.suptitle("Options Monte Carlo Simulation", fontsize=14)
+    if save_path:
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
+        print(f"\nPlot saved as '{save_path}'")
+    if show_plot:
+        plt.show()
+    else:
+        plt.close(fig)
+
     return {
         "final_values": final_values,
         "total_init_value": total_init_value,
